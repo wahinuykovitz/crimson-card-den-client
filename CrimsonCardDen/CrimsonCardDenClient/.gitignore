@@ -1,0 +1,52 @@
+# === Unity core ===
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Mm]emoryCaptures/
+UserSettings/
+
+# Asset Store / cache
+Assets/AssetStoreTools*
+
+# VS / VSCode / Rider
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.user
+*.unityproj
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Crash & debug
+*.stacktrace
+*.pidb
+*.mdb
+*.opendb
+*.VC.db
+
+# Cache
+Assembly-CSharp-Editor-firstpass.csproj
+Assembly-CSharp-Editor.csproj
+Assembly-CSharp-firstpass.csproj
+Assembly-CSharp.csproj
+
+# Builds / exported
+*.apk
+*.aab
+*.ipa
+*.exe
+*.app
+*.appx
+*.xcodeproj
+*.xcworkspace
+
+# Rider plugin
+.resharper/
+*.DotSettings.user
