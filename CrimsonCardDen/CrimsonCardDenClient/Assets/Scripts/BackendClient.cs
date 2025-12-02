@@ -18,16 +18,13 @@ public class BackendClient : MonoBehaviour
     [Tooltip("Log requests and responses to Unity console for debugging.")]
     [SerializeField] private bool logRequests = true;
 
-    // Backend base path – this must match the ASP.NET controller route prefix.
-    private const string BasePath = "/api/games/500";
-
     private HttpClient http;
 
     private void Awake()
     {
         http = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(10)
+            Timeout = TimeSpan.FromSeconds(15)
         };
     }
 
@@ -74,26 +71,26 @@ public class BackendClient : MonoBehaviour
     // ---------- Public API used by GameController ----------
 
     /// <summary>
-    /// Simple local deal demo endpoint (optional).
-    /// Backend route (MVP): POST /api/games/500/deal-local
+    /// Simple local deal demo endpoint. Returns one-off hands.
+    /// Backend route: POST /api/games/500/host-local
     /// Body: { playerCount }
     /// </summary>
     public Task<DealResponse> HostLocalDealAsync(int playerCount)
     {
         return PostJsonAsync<DealResponse>(
-            $"{BasePath}/deal-local",
+            "/api/games/500/host-local",
             new { playerCount });
     }
 
     /// <summary>
-    /// Creates a full local 2- or 4-player session.
-    /// Backend route (MVP): POST /api/games/500/host-local
+    /// Creates a full local 4-player session.
+    /// Backend route: POST /api/games/500/sessions/host-local
     /// Body: { playerCount }
     /// </summary>
     public Task<SessionResponse> HostLocalSessionAsync(int playerCount)
     {
         return PostJsonAsync<SessionResponse>(
-            $"{BasePath}/host-local",
+            "/api/games/500/sessions/host-local",
             new { playerCount });
     }
 
@@ -109,7 +106,7 @@ public class BackendClient : MonoBehaviour
         string trump)
     {
         return PostJsonAsync<SessionResponse>(
-            $"{BasePath}/sessions/{sessionId}/bidding/bid",
+            $"/api/games/500/sessions/{sessionId}/bidding/bid",
             new
             {
                 seatIndex,
@@ -128,7 +125,7 @@ public class BackendClient : MonoBehaviour
         int seatIndex)
     {
         return PostJsonAsync<SessionResponse>(
-            $"{BasePath}/sessions/{sessionId}/bidding/pass",
+            $"/api/games/500/sessions/{sessionId}/bidding/pass",
             new
             {
                 seatIndex
@@ -144,7 +141,7 @@ public class BackendClient : MonoBehaviour
         string sessionId)
     {
         return PostJsonAsync<SessionResponse>(
-            $"{BasePath}/sessions/{sessionId}/kitty/reveal",
+            $"/api/games/500/sessions/{sessionId}/kitty/reveal",
             new { });
     }
 
@@ -159,7 +156,7 @@ public class BackendClient : MonoBehaviour
         int cardIndex)
     {
         return PostJsonAsync<SessionResponse>(
-            $"{BasePath}/sessions/{sessionId}/play-card",
+            $"/api/games/500/sessions/{sessionId}/play-card",
             new
             {
                 seatIndex,
