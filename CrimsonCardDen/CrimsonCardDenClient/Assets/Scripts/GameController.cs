@@ -5,6 +5,10 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
+/// <summary>
+/// Thin client for driving a local 4-player 500 game via the backend.
+/// Player is always seat 0 in this prototype.
+/// </summary>
 public class GameController : MonoBehaviour
 {
     [Header("Backend")]
@@ -37,7 +41,7 @@ public class GameController : MonoBehaviour
     private string currentSessionId;
     private SessionResponse currentSession;
 
-    private const int PlayerSeatIndex = 0; // local player is always seat 0
+    private const int PlayerSeatIndex = 0; // you are always seat 0
 
     // Simple client-side match scores (sum of hand scores)
     private int matchScoreA = 0;
@@ -103,7 +107,7 @@ public class GameController : MonoBehaviour
         if (cardIndexInput != null && string.IsNullOrWhiteSpace(cardIndexInput.text))
             cardIndexInput.text = "0";
 
-        // Populate dropdowns if empty (otherwise use whatever you set up in the Editor)
+        // If dropdowns are empty, populate them
         if (tricksDropdown != null && tricksDropdown.options.Count == 0)
         {
             tricksDropdown.options = new List<TMP_Dropdown.OptionData>
@@ -126,7 +130,7 @@ public class GameController : MonoBehaviour
 
     private async void OnDealClicked()
     {
-        if (dealHandText == null) return;
+        if (dealHandText == null || backendClient == null) return;
 
         dealHandText.text = "Dealing...";
         try
@@ -154,6 +158,12 @@ public class GameController : MonoBehaviour
 
     private async void OnHostSessionClicked()
     {
+        if (backendClient == null)
+        {
+            Debug.LogError("[GameController] BackendClient is not assigned.");
+            return;
+        }
+
         if (sessionInfoText != null)
             sessionInfoText.text = "Creating new hand...";
 
@@ -165,7 +175,7 @@ public class GameController : MonoBehaviour
             currentSession = await backendClient.HostLocalSessionAsync(4);
             currentSessionId = currentSession.id;
 
-            UpdateUiFromSession("New hand created. Phase = Bidding.");
+            UpdateUiFromSession("New hand created. Phase = Bidding (or equivalent).");
 
             // Let bots bid until it's your turn or bidding finishes
             await AutoBidForBotsAsync();
@@ -180,41 +190,37 @@ public class GameController : MonoBehaviour
 
     private void OnNextHandClicked()
     {
-        // Start a new hand; matchScoreA/B are kept
+        // Just start a new session/hand; matchScoreA/B are kept
         OnHostSessionClicked();
     }
 
     // ---------- Player bidding ----------
 
-    public async void OnSubmitBidClicked()
+    private async void OnSubmitBidClicked()
     {
         if (!EnsureSession()) return;
-        if (backendClient == null)
-        {
-            Debug.LogError("[GameController] BackendClient is not assigned.");
-            return;
-        }
+        if (backendClient == null) return;
 
-        if (currentSession.phase != "Bidding" || currentSession.bidding == null)
+        if (currentSession.bidding == null)
         {
             if (sessionInfoText != null)
-                sessionInfoText.text = $"Cannot bid: phase is {currentSession.phase}.";
+                sessionInfoText.text = "No bidding state available.";
             return;
         }
 
-        // If it's not your turn yet, let AI act until it is (or bidding ends)
+        // Only allow if it's actually your turn to bid
         if (currentSession.bidding.currentSeatIndex != PlayerSeatIndex)
         {
-            await AutoBidForBotsAsync();
+            if (sessionInfoText != null)
+                sessionInfoText.text = $"Not your turn to bid (current seat {currentSession.bidding.currentSeatIndex}).";
+            return;
+        }
 
-            if (currentSession.phase != "Bidding" ||
-                currentSession.bidding == null ||
-                currentSession.bidding.currentSeatIndex != PlayerSeatIndex)
-            {
-                if (sessionInfoText != null)
-                    sessionInfoText.text = "Still not your turn to bid.";
-                return;
-            }
+        if (playerHasPassedThisHand)
+        {
+            if (sessionInfoText != null)
+                sessionInfoText.text = "You have already passed this hand.";
+            return;
         }
 
         int tricks = GetSelectedTricks();
@@ -222,36 +228,24 @@ public class GameController : MonoBehaviour
 
         try
         {
-            currentSession = await backendClient.PlaceBidAsync(
-                currentSessionId,
-                PlayerSeatIndex,
-                tricks,
-                trump);
-
-            playerHasPassedThisHand = false; // you’ve made a live bid
+            currentSession = await backendClient.PlaceBidAsync(currentSessionId, PlayerSeatIndex, tricks, trump);
+            playerHasPassedThisHand = false; // you’re actively in this auction
             UpdateUiFromSession($"Player (seat 0) bid {tricks} {trump}.");
 
-            // Let AI continue bidding until it’s your turn again or bidding ends
             await AutoBidForBotsAsync();
         }
         catch (Exception ex)
         {
             Debug.LogError(ex);
             if (sessionInfoText != null)
-                sessionInfoText.text = $"Bid failed: {ex.Message}";
+                sessionInfoText.text = "Error submitting bid. See console.";
         }
     }
 
     private async void OnPassClicked()
     {
         if (!EnsureSession()) return;
-
-        if (currentSession.phase != "Bidding")
-        {
-            if (sessionInfoText != null)
-                sessionInfoText.text = $"Cannot pass: phase is {currentSession.phase}.";
-            return;
-        }
+        if (backendClient == null) return;
 
         if (currentSession.bidding == null)
         {
@@ -268,19 +262,11 @@ public class GameController : MonoBehaviour
             return;
         }
 
-        // If it's not your turn, let AI handle their bids until it is.
+        // Only pass if it's actually your turn to act
         if (currentSession.bidding.currentSeatIndex != PlayerSeatIndex)
         {
             await AutoBidForBotsAsync();
-
-            if (currentSession.phase != "Bidding" ||
-                currentSession.bidding == null ||
-                currentSession.bidding.currentSeatIndex != PlayerSeatIndex)
-            {
-                if (sessionInfoText != null)
-                    sessionInfoText.text = "Still not your turn to act.";
-                return;
-            }
+            return;
         }
 
         try
@@ -299,11 +285,12 @@ public class GameController : MonoBehaviour
         }
     }
 
-    // ---------- Optional manual kitty reveal (AI also uses this) ----------
+    // ---------- Optional manual kitty reveal (auto is done in bots) ----------
 
     private async void OnRevealKittyClicked()
     {
         if (!EnsureSession()) return;
+        if (backendClient == null) return;
 
         try
         {
@@ -323,13 +310,7 @@ public class GameController : MonoBehaviour
     private async void OnPlayPlayerCardClicked()
     {
         if (!EnsureSession()) return;
-
-        if (currentSession.phase != "Playing")
-        {
-            if (sessionInfoText != null)
-                sessionInfoText.text = $"Phase is {currentSession.phase}, not Playing.";
-            return;
-        }
+        if (backendClient == null) return;
 
         if (currentSession.currentSeatToPlay == null)
         {
@@ -342,15 +323,8 @@ public class GameController : MonoBehaviour
         if (currentSession.currentSeatToPlay != PlayerSeatIndex)
         {
             await AutoPlayAiUntilPlayerTurnOrEnd();
-            if (!EnsureSession() || currentSession.phase != "Playing")
+            if (!EnsureSession() || currentSession.currentSeatToPlay != PlayerSeatIndex)
                 return;
-
-            if (currentSession.currentSeatToPlay != PlayerSeatIndex)
-            {
-                if (sessionInfoText != null)
-                    sessionInfoText.text = $"Still not your turn (seat {currentSession.currentSeatToPlay}).";
-                return;
-            }
         }
 
         int cardIndex = ParseCardIndex();
@@ -373,10 +347,10 @@ public class GameController : MonoBehaviour
     private async System.Threading.Tasks.Task AutoPlayAiUntilPlayerTurnOrEnd()
     {
         if (!EnsureSession()) return;
+        if (backendClient == null) return;
 
         int safety = 0;
         while (currentSession != null &&
-               currentSession.phase == "Playing" &&
                currentSession.currentSeatToPlay != null &&
                currentSession.currentSeatToPlay != PlayerSeatIndex &&
                safety < 200)
@@ -397,7 +371,7 @@ public class GameController : MonoBehaviour
             UpdateUiFromSession($"AI seat {seat} played first card.");
         }
 
-        if (currentSession != null && currentSession.phase == "Completed")
+        if (currentSession != null && string.Equals(currentSession.phase, "Completed", StringComparison.OrdinalIgnoreCase))
         {
             ApplyHandToMatchScores();
             UpdateUiFromSession("Hand completed.");
@@ -405,6 +379,85 @@ public class GameController : MonoBehaviour
     }
 
     // ---------- AI bidding helper ----------
+
+    private async System.Threading.Tasks.Task AutoBidForBotsAsync()
+    {
+        if (!EnsureSession()) return;
+        if (backendClient == null) return;
+
+        // If bidding is already over, either go to Kitty or ignore
+        if (currentSession.bidding == null || currentSession.bidding.isCompleted)
+        {
+            // If server has transitioned to Kitty phase, auto-reveal kitty
+            if (string.Equals(currentSession.phase, "Kitty", StringComparison.OrdinalIgnoreCase))
+            {
+                currentSession = await backendClient.RevealKittyAsync(currentSessionId);
+                UpdateUiFromSession("Kitty revealed automatically after bidding.");
+            }
+            return;
+        }
+
+        int safety = 0;
+
+        while (currentSession.bidding != null &&
+               !currentSession.bidding.isCompleted &&
+               currentSession.bidding.currentSeatIndex != PlayerSeatIndex &&
+               safety < 50)
+        {
+            safety++;
+
+            int seat = currentSession.bidding.currentSeatIndex;
+            var botBid = ChooseBotBid(seat);
+
+            try
+            {
+                if (botBid == null)
+                {
+                    currentSession = await backendClient.PassAsync(currentSessionId, seat);
+                    UpdateUiFromSession($"AI seat {seat} passed.");
+                }
+                else
+                {
+                    currentSession = await backendClient.PlaceBidAsync(
+                        currentSessionId,
+                        seat,
+                        botBid.Value.tricks,
+                        botBid.Value.trump);
+
+                    UpdateUiFromSession($"AI seat {seat} bid {botBid.Value.tricks} {botBid.Value.trump}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError(ex);
+                // Fallback: pass
+                currentSession = await backendClient.PassAsync(currentSessionId, seat);
+                UpdateUiFromSession($"AI seat {seat} passed (fallback).");
+            }
+
+            if (currentSession.bidding == null || currentSession.bidding.isCompleted)
+                break;
+        }
+
+        // Edge case: everyone passed and no high bid → treat as dead hand, start new one
+        if (currentSession.bidding != null &&
+            !currentSession.bidding.isCompleted &&
+            currentSession.bidding.currentHighBid == null &&
+            currentSession.bidding.actions != null &&
+            currentSession.bidding.actions.Count >= currentSession.playerCount)
+        {
+            UpdateUiFromSession("Everyone passed. Starting a new hand.");
+            OnHostSessionClicked();
+            return;
+        }
+
+        // If bidding has ended properly, and we’re in Kitty, auto-reveal
+        if (string.Equals(currentSession.phase, "Kitty", StringComparison.OrdinalIgnoreCase))
+        {
+            currentSession = await backendClient.RevealKittyAsync(currentSessionId);
+            UpdateUiFromSession("Kitty revealed automatically after AI bidding.");
+        }
+    }
 
     private struct BotBid
     {
@@ -418,7 +471,6 @@ public class GameController : MonoBehaviour
         if (seatHand == null || seatHand.cards == null || seatHand.cards.Count == 0)
             return null;
 
-        // Evaluate each suit
         var scores = new Dictionary<string, float>();
         foreach (var s in trumpOrder)
         {
@@ -451,7 +503,6 @@ public class GameController : MonoBehaviour
                 scores[card.suit] += value;
         }
 
-        // Best suit by score
         string bestSuit = trumpOrder[0];
         float bestScore = scores[bestSuit];
         foreach (var kvp in scores)
@@ -463,7 +514,6 @@ public class GameController : MonoBehaviour
             }
         }
 
-        // Compute current high bid if any
         int highStrength = -1;
         int highTricks = 0;
 
@@ -473,7 +523,6 @@ public class GameController : MonoBehaviour
             highTricks = currentSession.bidding.currentHighBid.tricks;
         }
 
-        // If there is NO high bid yet, open with 6 in best suit.
         if (highStrength < 0)
         {
             return new BotBid
@@ -483,7 +532,6 @@ public class GameController : MonoBehaviour
             };
         }
 
-        // From here on, we're trying to overcall an existing bid: use a threshold.
         if (bestScore < 8.0f)
             return null;
 
@@ -493,7 +541,6 @@ public class GameController : MonoBehaviour
         if (bestSuitIndex < 0)
             bestSuitIndex = 0;
 
-        // Try to find minimal contract that beats current high bid
         for (int tricks = highTricks; tricks <= maxTricks; tricks++)
         {
             for (int suitIndex = bestSuitIndex; suitIndex < trumpOrder.Length; suitIndex++)
@@ -512,85 +559,7 @@ public class GameController : MonoBehaviour
             }
         }
 
-        // Can't beat current high bid with our simple rules -> pass
         return null;
-    }
-
-    private async System.Threading.Tasks.Task AutoBidForBotsAsync()
-    {
-        if (!EnsureSession()) return;
-
-        // If bidding is already over, either go to Kitty or ignore
-        if (currentSession.phase != "Bidding" || currentSession.bidding == null)
-        {
-            if (currentSession.phase == "Kitty")
-            {
-                currentSession = await backendClient.RevealKittyAsync(currentSessionId);
-                UpdateUiFromSession("Kitty revealed automatically after bidding.");
-            }
-            return;
-        }
-
-        int safety = 0;
-
-        while (currentSession.phase == "Bidding" &&
-               currentSession.bidding != null &&
-               !currentSession.bidding.isCompleted &&
-               currentSession.bidding.currentSeatIndex != PlayerSeatIndex &&
-               safety < 50)
-        {
-            safety++;
-
-            int seat = currentSession.bidding.currentSeatIndex;
-            var botBid = ChooseBotBid(seat);
-
-            try
-            {
-                if (botBid == null)
-                {
-                    currentSession = await backendClient.PassAsync(currentSessionId, seat);
-                    UpdateUiFromSession($"AI seat {seat} passed.");
-                }
-                else
-                {
-                    currentSession = await backendClient.PlaceBidAsync(
-                        currentSessionId,
-                        seat,
-                        botBid.Value.tricks,
-                        botBid.Value.trump);
-                    UpdateUiFromSession($"AI seat {seat} bid {botBid.Value.tricks} {botBid.Value.trump}.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError(ex);
-                // Fallback: pass
-                currentSession = await backendClient.PassAsync(currentSessionId, seat);
-                UpdateUiFromSession($"AI seat {seat} passed (fallback).");
-            }
-
-            if (currentSession.phase != "Bidding" || currentSession.bidding == null)
-                break;
-        }
-
-        // Edge case: everyone passed
-        if (currentSession.phase == "Bidding" &&
-            currentSession.bidding != null &&
-            currentSession.bidding.currentHighBid == null &&
-            currentSession.bidding.actions != null &&
-            currentSession.bidding.actions.Count >= currentSession.playerCount)
-        {
-            UpdateUiFromSession("Everyone passed. Starting a new hand.");
-            OnHostSessionClicked();
-            return;
-        }
-
-        // If bidding has ended properly, we should be in Kitty phase now
-        if (currentSession.phase == "Kitty")
-        {
-            currentSession = await backendClient.RevealKittyAsync(currentSessionId);
-            UpdateUiFromSession("Kitty revealed automatically after AI bidding.");
-        }
     }
 
     // ---------- Hand sorting ----------
@@ -617,23 +586,19 @@ public class GameController : MonoBehaviour
         if (a == null) return 1;
         if (b == null) return -1;
 
-        // Jokers first
         if (a.isJoker && !b.isJoker) return -1;
         if (!a.isJoker && b.isJoker) return 1;
         if (a.isJoker && b.isJoker) return 0;
 
-        // Suit order
         int suitA = suitSortOrder.TryGetValue(a.suit ?? "", out var sa) ? sa : 999;
         int suitB = suitSortOrder.TryGetValue(b.suit ?? "", out var sb) ? sb : 999;
         int suitCompare = suitA.CompareTo(suitB);
         if (suitCompare != 0) return suitCompare;
 
-        // Rank: Ace high → low (so we sort by rank index descending)
         int rankA = rankSortOrder.TryGetValue(a.rank ?? "", out var ra) ? ra : -1;
         int rankB = rankSortOrder.TryGetValue(b.rank ?? "", out var rb) ? rb : -1;
 
-        // Higher rank index first
-        return rankB.CompareTo(rankA);
+        return rankB.CompareTo(rankA); // higher rank first
     }
 
     // ---------- Helpers ----------
@@ -704,6 +669,18 @@ public class GameController : MonoBehaviour
         if (currentSession == null)
             return;
 
+        // Derive a "phase" label even if backend doesn’t send one
+        string phaseLabel = currentSession.phase;
+        if (string.IsNullOrEmpty(phaseLabel))
+        {
+            if (currentSession.bidding != null && !currentSession.bidding.isCompleted)
+                phaseLabel = "Bidding";
+            else if (currentSession.currentSeatToPlay != null)
+                phaseLabel = "Playing";
+            else if (currentSession.contractMade != null)
+                phaseLabel = "Completed";
+        }
+
         // Hand for seat 0
         if (handSeat0Text != null)
         {
@@ -737,7 +714,7 @@ public class GameController : MonoBehaviour
 
             string status =
                 $"Session {currentSession.id}\n" +
-                $"Phase: {currentSession.phase}\n" +
+                $"Phase: {phaseLabel}\n" +
                 $"Dealer: {b?.dealerSeatIndex}\n" +
                 $"Bidding current seat: {b?.currentSeatIndex}\n" +
                 $"High bid: {highBidText}\n" +
@@ -753,22 +730,29 @@ public class GameController : MonoBehaviour
             sessionInfoText.text = status;
         }
 
-        string phase = currentSession.phase ?? string.Empty;
+        // --- Button enabling logic ---
+
+        bool biddingActive = currentSession.bidding != null && !currentSession.bidding.isCompleted;
+        bool isPlayerTurnToBid = biddingActive &&
+                                 currentSession.bidding.currentSeatIndex == PlayerSeatIndex;
 
         if (revealKittyButton != null)
-            revealKittyButton.interactable = phase == "Kitty";
+            revealKittyButton.interactable = string.Equals(phaseLabel, "Kitty", StringComparison.OrdinalIgnoreCase);
 
         if (playCardButton != null)
-            playCardButton.interactable = phase == "Playing";
+            playCardButton.interactable =
+                string.Equals(phaseLabel, "Playing", StringComparison.OrdinalIgnoreCase) ||
+                currentSession.currentSeatToPlay != null;
 
         if (submitBidButton != null)
-            submitBidButton.interactable = phase == "Bidding" && !playerHasPassedThisHand;
+            submitBidButton.interactable = isPlayerTurnToBid && !playerHasPassedThisHand;
 
         if (passButton != null)
-            passButton.interactable = phase == "Bidding" && !playerHasPassedThisHand;
+            passButton.interactable = isPlayerTurnToBid && !playerHasPassedThisHand;
 
         if (nextHandButton != null)
-            nextHandButton.interactable = phase == "Completed";
+            nextHandButton.interactable =
+                string.Equals(phaseLabel, "Completed", StringComparison.OrdinalIgnoreCase);
     }
 
     private string CardToString(CardDto c)
@@ -780,7 +764,6 @@ public class GameController : MonoBehaviour
 
         string label = $"{c.rank} of {c.suit}";
 
-        // Highlight Jacks
         if (!string.IsNullOrEmpty(c.rank) &&
             c.rank.Equals("Jack", StringComparison.OrdinalIgnoreCase))
         {
